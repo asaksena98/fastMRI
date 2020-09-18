@@ -7,8 +7,11 @@ LICENSE file in the root directory of this source tree.
 
 import math
 import pathlib
+import sys
 import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(sys.path[0])))
 import random
+import json
 
 import numpy as np
 import torch
@@ -23,6 +26,7 @@ from data import transforms as T
 from models.mri_model import MRIModel
 from models.unet.unet_model import UnetModel
 
+coil_ssim = {}
 
 class DataTransform:
     """
@@ -282,11 +286,18 @@ class VariationalNetworkModel(MRIModel):
         }
 
     def test_step(self, batch, batch_idx):
-        masked_kspace, mask, _, fname, slice, _ = batch
+        # masked_kspace, mask, _, fname, slice, _ = batch
+        masked_kspace, mask, target, fname, slice, max_value = batch
         output = self.forward(masked_kspace, mask)
-        b, h, w = output.shape
-        crop_size = min(w, self.hparams.resolution)
-        output = T.center_crop(output, (crop_size, crop_size))
+        target, output = T.center_crop_to_smallest(target, output)
+        ssim = 1 - self.ssim_loss(output.unsqueeze(1), target.unsqueeze(1), data_range=max_value)
+        if str(masked_kspace.shape[1]) not in coil_ssim.keys():
+            coil_ssim[str(masked_kspace.shape[1])] = []
+        coil_ssim[str(masked_kspace.shape[1])].append(ssim.item())
+        # print('ssim', ssim.item())
+        # b, h, w = output.shape
+        # crop_size = min(w, self.hparams.resolution)
+        # output = T.center_crop(output, (crop_size, crop_size))
         return {
             'fname': fname,
             'slice': slice,
@@ -369,6 +380,14 @@ def run(args):
         model.hparams.sample_rate = 1.
         trainer = create_trainer(args)
         trainer.test(model)
+        print('here')
+        output = {}
+        for key in coil_ssim:
+            print(key, len(coil_ssim[key]))
+            output[key] = sum(coil_ssim[key]) / len(coil_ssim[key])
+        print(output)
+        with open('result.json', 'w') as fp:
+            json.dump(output, fp)
 
 
 def main(args=None):
